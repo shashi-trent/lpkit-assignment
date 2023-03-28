@@ -1,13 +1,17 @@
 from datetime import time, datetime
 from pytz import timezone
-from lpkitchen.classes import ReportStatus, StoreStatus, WeekDay
+from lpkit.classes import ReportStatus, StoreStatus, WeekDay
+from lpkit.utils import DateUtils
 
 class Table:
     def __init__(self):
-        self.__synced__ = {}
+        self.__synced__:dict[str, any] = {}
 
     def column(self, name:str, rowDict):
-        self.__synced__[name] = rowDict[name]
+        try:
+            self.__synced__[name] = rowDict[name]
+        except:
+            self.__synced__[name] = None
         return self.__synced__[name]
 
 
@@ -23,9 +27,9 @@ class PolledStat(Table):
         return "store_poll_stat"
     
     def __init__(self, row):
-        Table.__init__()
+        Table.__init__(self)
         self.storeId:int = self.column(PolledStat._StoreId, row)
-        self.timestampUtc = datetime.strptime(self.column(PolledStat._TimestampUtc, row), "%Y-%m-%d %H:%M:%S.%f %Z")
+        self.timestampUtc = DateUtils.toDateTime(self.column(PolledStat._TimestampUtc, row))
         self.status = StoreStatus(self.column(PolledStat._Status, row))
 
 
@@ -41,19 +45,21 @@ class StoreSchedule(Table):
         return "store_schedule"
 
     def __init__(self, row):
-        Table.__init__()
+        Table.__init__(self)
         self.storeId:int = self.column(StoreSchedule._StoreId, row)
         self.dayOfWeek:WeekDay = WeekDay(self.column(StoreSchedule._DayOfWeek, row))
-        self.lStartTime = time.fromisoformat(self.column(StoreSchedule._LStartTime, row))
-        self.lEndTime = time.fromisoformat(self.column(StoreSchedule._LEndTime, row))
+        self.lStartTime:time = DateUtils.toTime(self.column(StoreSchedule._LStartTime, row))
+        self.lEndTime:time = DateUtils.toTime(self.column(StoreSchedule._LEndTime, row))
     
     @staticmethod
     def dummyFullDaySchedule(storeId:int, dayOfWeek:WeekDay):
-        schedule = StoreSchedule(row={})
-        schedule.storeId = storeId
-        schedule.dayOfWeek = dayOfWeek
-        schedule.lStartTime = time.fromisoformat("00:00:00.0")
-        schedule.lEndTime =  time.fromisoformat("23:59:59.9999")
+        schedule = StoreSchedule(row={
+            StoreSchedule._StoreId: storeId,
+            StoreSchedule._DayOfWeek: dayOfWeek.value,
+            StoreSchedule._LStartTime: "00:00:00.0",
+            StoreSchedule._LEndTime: "23:59:59.9999"
+        })
+        
         return schedule
 
 
@@ -69,10 +75,13 @@ class StoreInfo(Table):
         return "store_info"
 
     def __init__(self, row):
-        Table.__init__()
+        Table.__init__(self)
         self.storeId:int = self.column(StoreInfo._StoreId, row)
-        self.onBoardedAt:int = self.column(StoreInfo._OnBoardedAt, row)
-        self.timezone = timezone(self.column(StoreInfo._Timezone, row))
+        self.onBoardedAt:int = self.column(StoreInfo._OnBoardedAt, row) or 0
+        try:
+            self.timezone = timezone(self.column(StoreInfo._Timezone, row))
+        except:
+            self.timezone = None
 
 
 class ReportStat(Table):
@@ -88,9 +97,9 @@ class ReportStat(Table):
         return "report_stat"
 
     def __init__(self, row):
-        Table.__init__()
+        Table.__init__(self)
         self.id:str = self.column(ReportStat._Id, row)
         self.version:int = self.column(ReportStat._Version, row)
         self.status = ReportStatus(self.column(ReportStat._Status, row))
         self.runAt:int = self.column(ReportStat._RunAt, row)
-        self.completedAt:int = self.column(ReportStat._CompletedAt, row)
+        self.completedAt:int|None = self.column(ReportStat._CompletedAt, row)

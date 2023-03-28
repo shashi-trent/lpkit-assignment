@@ -1,9 +1,10 @@
-import time
-
+import traceback
 import pytz
-from lpkitchen.classes import StoreReport, UtcEpochRange
-from lpkitchen.repos import *
-from lpkitchen.utils import DateUtils, WeekDay, SubReportType
+from os.path import exists as osPathExists
+from lpkit.classes import StoreReport, UtcEpochRange
+from lpkit.configkeeper import ConfigKeeper
+from lpkit.repos import *
+from lpkit.utils import DateUtils, WeekDay, SubReportType
 
 # @param(localSchedules) : all schedules inside it must be w.r.t same timezone
 def filterSchedulesInUtcEpochRange(fromUtcEpoch:int, toUtcEpoch:int, localSchedules:list[StoreSchedule], refWeekStartUtcEpoch:int):
@@ -20,27 +21,30 @@ def filterSchedulesInUtcEpochRange(fromUtcEpoch:int, toUtcEpoch:int, localSchedu
         if rightEpoch > leftEpoch:
             thisEpochRange:tuple[int,int] = leftEpoch, rightEpoch
 
-            if filteredEpochRanges.count == 0:
+            if len(filteredEpochRanges) == 0:
                 filteredEpochRanges.append(thisEpochRange)
             else:
                 lastEpochRange = filteredEpochRanges[-1]
                 if lastEpochRange[1] >= thisEpochRange[0]:
-                    lastEpochRange[1] = max(lastEpochRange[1], thisEpochRange[1])
+                    lastEpochRange = lastEpochRange[0], max(lastEpochRange[1], thisEpochRange[1])
                     filteredEpochRanges[-1] = lastEpochRange
     
     return filteredEpochRanges
 
 def calculateUpDownHours(utcEpochRangesInput:list[tuple[int,int]], sortedPolledStats:list[PolledStat], ignoreTill:int, pivotUtcEpoch:int):
-    upDownMillis:tuple[int,int] = (0, 0)
+    upDownMillis:list[int] = [0, 0]
 
     # modified time-ranges w.r.t ignoreTill value provided
     utcEpochRanges:list[tuple[int,int]] = []
-    for idx in range(0, utcEpochRangesInput.count):
+    for idx in range(0, len(utcEpochRangesInput)):
         if utcEpochRangesInput[idx][1] > ignoreTill:
             partlyApplicableTupleModified = max(utcEpochRangesInput[idx][0], ignoreTill), utcEpochRangesInput[idx][1]
             utcEpochRanges.append(partlyApplicableTupleModified)
             utcEpochRanges += utcEpochRangesInput[idx+1:]
             break
+
+    if len(utcEpochRanges) == 0:
+        return 0, 0
 
     # last (or default-last) polledStat properties for use in iteration
     lastTimeRangeIdx:int = 0
@@ -67,13 +71,13 @@ def calculateUpDownHours(utcEpochRangesInput:list[tuple[int,int]], sortedPolledS
             upDownMillis[1] += millisDiff
         return fromIdx
 
-    for statIdx in range(sortedPolledStats.count):
+    for statIdx in range(len(sortedPolledStats)):
         stat = sortedPolledStats[statIdx]
-        pollUtcEpoch:int = DateUtils.toUtcEpoch(inputTime=stat.timestampUtc)
+        pollUtcEpoch:int = round(stat.timestampUtc.timestamp() * 1000)
 
         if pollUtcEpoch >= ignoreTill:
             curTimeRangeIdx = lastTimeRangeIdx
-            while curTimeRangeIdx < utcEpochRanges.count:
+            while curTimeRangeIdx < len(utcEpochRanges):
                 if utcEpochRanges[curTimeRangeIdx][1] <= pollUtcEpoch:
                     curTimeRangeIdx += 1
                 else:
@@ -83,16 +87,17 @@ def calculateUpDownHours(utcEpochRangesInput:list[tuple[int,int]], sortedPolledS
             midEpoch = (lastPollUtcEpoch + pollUtcEpoch) / 2
             
             # calculate time diff from lastPollStat to middleTimeOf(lastPollStat, curPollStat)
-            rangeIdx:int = addEpochFilteredMillisDiff(lastTimeRangeIdx, curTimeRangeIdx + 1, lastPollUtcEpoch, midEpoch, lastPollStatus)
+            rangeIdx:int = addEpochFilteredMillisDiff(lastTimeRangeIdx, min(curTimeRangeIdx + 1, len(utcEpochRanges)), lastPollUtcEpoch, midEpoch, lastPollStatus)
 
-            if curTimeRangeIdx < utcEpochRanges.count and utcEpochRanges[curTimeRangeIdx][0] <= pollUtcEpoch:
+            if curTimeRangeIdx < len(utcEpochRanges) and utcEpochRanges[curTimeRangeIdx][0] <= pollUtcEpoch:
                 # calculate time diff from middleTimeOf(lastPollStat, curPollStat) to curPollStat
                 rangeIdx = addEpochFilteredMillisDiff(rangeIdx, curTimeRangeIdx + 1, midEpoch, pollUtcEpoch, stat.status)
 
                 # if it is last-polledStat -> 
                 #       use pivotUtcEpoch(=epochOf when report generation started) as next polledStat(with status=None) to extrapolate
-                extrapolateToEpoch = (pivotUtcEpoch + pollUtcEpoch) / 2
-                rangeIdx = addEpochFilteredMillisDiff(curTimeRangeIdx, sortedPolledStats.count, pollUtcEpoch, extrapolateToEpoch, stat.status)
+                if statIdx == len(sortedPolledStats)-1:
+                    extrapolateToEpoch = (pivotUtcEpoch + pollUtcEpoch) / 2
+                    rangeIdx = addEpochFilteredMillisDiff(curTimeRangeIdx, len(utcEpochRanges), pollUtcEpoch, extrapolateToEpoch, stat.status)
             else:
                 break
 
@@ -104,39 +109,56 @@ def calculateUpDownHours(utcEpochRangesInput:list[tuple[int,int]], sortedPolledS
 
 class ReportService:
     @staticmethod
-    async def generate(reportStat:ReportStat):
-        with open(f"report-{reportStat.id}-v{reportStat.version}.csv", "w") as reportFile:
-            reportFile.writelines([ReportService.getCsvHeader()])
+    def generate(reportStat:ReportStat, pivotEpoch:int|None=None):
+        try:
+            reportFilePath = f"{ConfigKeeper.getReportFolderPath()}report-{reportStat.id}-v{reportStat.version}.csv"
+            
+            # already existing : no effect
+            if osPathExists(reportFilePath):
+                return
+            
+            pivotEpoch = pivotEpoch or reportStat.runAt
+            
+            with open(reportFilePath, "w") as reportFile:
+                reportFile.writelines([ReportService.getCsvHeader()+"\n"])
 
-            batchSize = 25
-            batchNo = 0
-            while True:
-                stores = StoreRepo.getTzSortedStores(skip=batchNo*batchSize, limit=batchSize)
-                if stores.count == 0:
-                    break
+                pollStatBatchSize = ConfigKeeper.asInt('POLL_STAT_DBFETCH_BATCH_SIZE')
 
-                lastHourUpDownHours = ReportService.getSubReportStoreHours(stores,
-                                                            reportStat.runAt, SubReportType.LastHour, 8)
-                lastDayUpDownHours = ReportService.getSubReportStoreHours(stores,
-                                                            reportStat.runAt, SubReportType.LastDay, 1)
-                lastWeekUpDownHours = ReportService.getSubReportStoreHours(stores,
-                                                            reportStat.runAt, SubReportType.LastWeek, 1)
-                
-                reportFormatList = [
-                    StoreReport(store.storeId, lastHourUpDownHours[store.storeId][0], lastDayUpDownHours[store.storeId][0],
-                                lastWeekUpDownHours[store.storeId][0], lastHourUpDownHours[store.storeId][1],
-                                lastDayUpDownHours[store.storeId][1], lastWeekUpDownHours[store.storeId][1])
-                    for store in stores
-                ]
+                batchSize = ConfigKeeper.asInt("STORE_TZS_DBFETCH_BATCH_SIZE")
+                batchNo = 0
+                while True:
+                    stores = StoreRepo.getTzSortedStores(skip=batchNo*batchSize, limit=batchSize)
+                    if len(stores) == 0:
+                        break
 
-                reportFile.writelines([ReportService.getCsvText(storeReport) for storeReport in reportFormatList])
-                reportFile.flush()
-                
-                batchNo = batchNo + 1
-        
-        reportStat.status = ReportStatus.Complete
-        reportStat.completedAt = round(time.time() * 1000)
-        ReportRepo.saveStat(reportStat)
+                    lastHourUpDownHours = ReportService.getSubReportStoreHours(stores, pivotEpoch, SubReportType.LastHour, 
+                                                                            max(1, pollStatBatchSize//3))
+                    lastDayUpDownHours = ReportService.getSubReportStoreHours(stores, pivotEpoch, SubReportType.LastDay, 
+                                                                            max(1, pollStatBatchSize//24))
+                    lastWeekUpDownHours = ReportService.getSubReportStoreHours(stores, pivotEpoch, SubReportType.LastWeek, 
+                                                                            max(1, pollStatBatchSize//24))
+                    
+                    reportFormatList = [
+                        StoreReport(store.storeId, lastHourUpDownHours[store.storeId][0], lastDayUpDownHours[store.storeId][0],
+                                    lastWeekUpDownHours[store.storeId][0], lastHourUpDownHours[store.storeId][1],
+                                    lastDayUpDownHours[store.storeId][1], lastWeekUpDownHours[store.storeId][1])
+                        for store in stores
+                    ]
+
+                    reportFile.writelines([ReportService.getCsvText(storeReport)+"\n" for storeReport in reportFormatList])
+                    reportFile.flush()
+
+                    batchNo = batchNo + 1
+            
+            reportStat.status = ReportStatus.Complete
+            reportStat.completedAt = DateUtils.curUtcEpoch()
+            ReportRepo.saveStat(reportStat)
+        except Exception as e:
+            reportStat.status = ReportStatus.Error
+            reportStat.completedAt = DateUtils.curUtcEpoch()
+            ReportRepo.saveStat(reportStat)
+            print(f"exception={e}")
+            traceback.print_exc()
     
 
     @staticmethod
@@ -153,20 +175,23 @@ class ReportService:
             batch.clear()
 
         for store in stores:
+            if store.storeId not in upDownHoursDict:
+                upDownHoursDict[store.storeId] = (0, 0)
+
             if store.timezone is None:
                 store.timezone = timezone("America/Chicago")
             
             if tz != str(store.timezone):
-                if batch.count > 0:
+                if len(batch) > 0:
                     runAndClearCurBatch()
                 tz = str(store.timezone)
                 subReportTiming = DateUtils.subReportTiming(store.timezone, pivotUtcEpoch, subReportType)
-            elif batch.count >= pollBatchSize:
+            elif len(batch) >= pollBatchSize:
                 runAndClearCurBatch()
 
             batch.append(store)
 
-        if batch.count > 0:
+        if len(batch) > 0:
             runAndClearCurBatch()
 
         return upDownHoursDict
@@ -177,8 +202,9 @@ class ReportService:
         upDownHoursDict:dict[int, tuple[float, float]] = {}
 
         schedulesDict = StoreRepo.getStoreSchedules([store.storeId for store in stores], subReportTiming.lWeekDay)
-        
+
         concernedWeekDays:list[WeekDay] = [subReportTiming.lWeekDay] if subReportTiming.lWeekDay is not None else [wDay for wDay in WeekDay]
+        refWeekStartEpoch = DateUtils.getWeekStartUtcEpoch(subReportTiming.fromEpoch, subReportTiming.lPytzTimezone)
         
         for weekDay in concernedWeekDays:
             scheduledStoreIds:list[int] = []
@@ -187,23 +213,25 @@ class ReportService:
             validPollEpochRange = UtcEpochRange(fromEpoch=pivotUtcEpoch, toEpoch=0, lPytzTimezone=pytz.utc)
             for store in stores:
                 filteredEpochRanges = filterSchedulesInUtcEpochRange(subReportTiming.fromEpoch, subReportTiming.toEpoch, 
-                                                schedulesDict[store.storeId][weekDay], subReportTiming.refWeekStartEpoch)
+                                                schedulesDict[store.storeId][weekDay], refWeekStartEpoch)
                 # if store is scheduled in concerned time range
-                if filteredEpochRanges.count != 0:
+                if len(filteredEpochRanges) != 0:
                     filteredEpochRangesDict[store.storeId] = filteredEpochRanges
                     scheduledStoreIds.append(store.storeId)
                     validPollEpochRange.fromEpoch = min(filteredEpochRanges[0][0], validPollEpochRange.fromEpoch)
-                    validPollEpochRange.toEpoch = min(filteredEpochRanges[-1][1], validPollEpochRange.toEpoch)
+                    validPollEpochRange.toEpoch = max(filteredEpochRanges[-1][1], validPollEpochRange.toEpoch)
             
-            if scheduledStoreIds.count == 0:
+            if len(scheduledStoreIds) == 0:
                 continue
 
             sortedPolledStats = StoreRepo.getSortedPolledStats(scheduledStoreIds, validPollEpochRange.fromEpoch - DateUtils.HOUR_TO_MILLIS,
                                                                validPollEpochRange.toEpoch + DateUtils.HOUR_TO_MILLIS)
             scheduledStoreIds.clear()
 
+            
+
             for store in stores:
-                dayUpDownHours = calculateUpDownHours(filteredEpochRangesDict[store.storeId], sortedPolledStats[store.storeId], store.onBoardedAt, pivotUtcEpoch)
+                dayUpDownHours = calculateUpDownHours(filteredEpochRangesDict.get(store.storeId) or [], sortedPolledStats.get(store.storeId) or [], store.onBoardedAt, pivotUtcEpoch)
                 if store.storeId not in upDownHoursDict:
                     upDownHoursDict[store.storeId] = dayUpDownHours
                 else:
@@ -214,8 +242,8 @@ class ReportService:
     
     @staticmethod
     def getCsvText(storeReport:StoreReport):
-        upTimeTextPart = f'{round(storeReport.uptime_last_hour * 60)},{"{.2f}".format(storeReport.uptime_last_day)},{"{.2f}".format(storeReport.uptime_last_week)}'
-        downTimeTextPart = f'{round(storeReport.downtime_last_hour * 60)},{"{.2f}".format(storeReport.downtime_last_day)},{"{.2f}".format(storeReport.downtime_last_week)}'
+        upTimeTextPart = f'{round(storeReport.uptime_last_hour * 60)},{"{:.2f}".format(storeReport.uptime_last_day)},{"{:.2f}".format(storeReport.uptime_last_week)}'
+        downTimeTextPart = f'{round(storeReport.downtime_last_hour * 60)},{"{:.2f}".format(storeReport.downtime_last_day)},{"{:.2f}".format(storeReport.downtime_last_week)}'
         
         return f'{storeReport.store_id},{upTimeTextPart},{downTimeTextPart}'
     

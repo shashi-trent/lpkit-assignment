@@ -1,4 +1,5 @@
 venv/
+lk-env/
 
 *.pyc
 __pycache__/

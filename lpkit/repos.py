@@ -1,12 +1,11 @@
-
-
-from lpkitchen.db import get_db
-from lpkitchen.models import *
-from lpkitchen.utils import WeekDay
+from lpkit.configkeeper import ConfigKeeper
+from lpkit.db import get_db
+from lpkit.models import *
+from lpkit.utils import WeekDay
 
 
 def inQueryStr(params:list):
-    if params.count == 1:
+    if len(params) == 1:
         return f"= {params[0]}"
     else:
         joinedParams = ", ".join([f"'{str(param)}'" for param in params])
@@ -18,26 +17,31 @@ class StoreRepo:
     #   @params toTimeUtc: is exculsive
     #
     @staticmethod
-    def getSortedPolledStats(storeIds:list[int], fromTimeUtc, toTimeUtc):
+    def getSortedPolledStats(storeIds:list[int], fromTimeUtcEpoch:int, toTimeUtcEpoch:int):
+        fromTimeUtc = DateUtils.toDateTimeIsoFormat(fromTimeUtcEpoch)
+        toTimeUtc = DateUtils.toDateTimeIsoFormat(toTimeUtcEpoch)
+
         db = get_db()
         stats:list = []
 
         batchNo = 0
-        batchSize = 25
+        batchSize = ConfigKeeper.asInt('POLL_STAT_DBFETCH_BATCH_SIZE')
         while True:
             skip = batchNo * batchSize
             _stats = db.execute(
-                " ".join(
-                    f"SELECT * FROM {PolledStat.table()} WHERE {PolledStat._StoreId} {inQueryStr(storeIds)} AND {PolledStat._TimestampUtc} >= ?",
-                    f"AND {PolledStat._TimestampUtc} < ? ORDER BY {PolledStat._TimestampUtc} OFFSET ? LIMIT ?"
-                ),
-                (fromTimeUtc, toTimeUtc, skip, batchSize)
+                " ".join((
+                    f"SELECT * FROM {PolledStat.table()} WHERE {PolledStat._StoreId} {inQueryStr(storeIds)} AND {PolledStat._TimestampUtc} >= '{fromTimeUtc}'",
+                    f"AND {PolledStat._TimestampUtc} < '{toTimeUtc}' ORDER BY {PolledStat._TimestampUtc} LIMIT ? OFFSET ?"
+                )),
+                (batchSize, skip)
             ).fetchall()
+
+            batchNo += 1
 
             if _stats is None:
                 _stats = []
             
-            if _stats.count == 0:
+            if len(_stats) == 0:
                 break
             else:
                 stats += _stats
@@ -57,10 +61,10 @@ class StoreRepo:
     def getStoreSchedules(storeIds:list[int], weekDay:WeekDay):
         db = get_db()
         hours = db.execute(
-            " ".join(
+            " ".join((
                 f"SELECT * FROM {StoreSchedule.table()} WHERE {StoreSchedule._StoreId} {inQueryStr(storeIds)}",
                 "" if weekDay is None else f"AND {StoreSchedule._DayOfWeek} = {weekDay.value}",
-            )
+            ))
         ).fetchall()
 
         if hours is None:
@@ -96,11 +100,8 @@ class StoreRepo:
     def getTzSortedStores(skip, limit):
         db = get_db()
         tzs = db.execute(
-            " ".join(
-                f"SELECT * FROM {StoreInfo.table()} ORDER BY {StoreInfo._Timezone} OFFSET ? LIMIT ?",
-                f""
-            ),
-            (skip, limit)
+            f"SELECT * FROM {StoreInfo.table()} ORDER BY {StoreInfo._Timezone} LIMIT ? OFFSET ?",
+            (limit, skip)
         ).fetchall()
 
         if tzs is None:
@@ -115,8 +116,7 @@ class ReportRepo:
     def getStat(reportId:str):
         db = get_db()
         stat = db.execute(
-            f"SELECT * from {ReportStat.table()} WHERE {ReportStat._Id} = ?",
-            (reportId)
+            f"SELECT * from {ReportStat.table()} WHERE {ReportStat._Id} = '{reportId}'",
         ).fetchone()
 
         return None if stat is None else ReportStat(stat)
@@ -127,15 +127,15 @@ class ReportRepo:
         error = True
         try:
             db.execute(
-                f"INSERT INTO {ReportStat.table()} ({ReportStat._Id}, {ReportStat._Status}, {ReportStat._RunAt}) VALUES (?, ?, ?)",
-                (stat.id, stat.status, stat.runAt)
+                f"INSERT INTO {ReportStat.table()} ({ReportStat._Id}, {ReportStat._Status}, {ReportStat._RunAt}, {ReportStat._Version}) VALUES (?, ?, ?, ?)",
+                (stat.id, stat.status.value, stat.runAt, stat.version)
             )
             db.commit()
             error = False
         except db.IntegrityError:
             db.execute(
                 f"UPDATE {ReportStat.table()} SET {ReportStat._Status} = ?, {ReportStat._CompletedAt} = ? WHERE {ReportStat._Id} = ?",
-                (stat.status, stat.completedAt, stat.id)
+                (stat.status.value, stat.completedAt, stat.id)
             )
             db.commit()
             error = False

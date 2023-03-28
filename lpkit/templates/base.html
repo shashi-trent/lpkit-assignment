@@ -1,0 +1,59 @@
+<!doctype html>
+<title>Assignment | LoopKitchen</title>
+<style>
+    body {display: flex;flex-direction: column;align-items: center;}
+    table, th, td {border: 1px solid;border-collapse: collapse;}
+    th, td {padding: 6px;}
+    a {
+        border: 1px solid; padding: 4px; background-color: antiquewhite;
+        text-decoration: none;
+        box-shadow: 4px 4px 4px gray ;
+    }
+</style>
+<body>
+    {% if reportData==None or reportData['ok']==False %}
+        <h3>Report | lpkit</h3>
+        <br><hr><br>
+        <label for="pivotinp">treat this utcEpoch (in millis) as pivot<br>generates report treating this as current-time</label><br>
+        <input id="pivotinp" type="number" onchange="onPivotChange()"><br><br>
+        <a id="triggerer" href="/trigger_report"><b>Trigger Report</b></a><br><br>
+        {% if reportData!=None %}
+            <p style="color: red; size: 16px;">an error occurred with last request</p>
+        {% endif %}
+    {% else %}
+        <h2>Report Data</h2>
+        <br><hr><br>
+        <div>
+            <table>
+                <tr>
+                  <th>ID</th>
+                  <th>Status</th>
+                  <th>Time Taken</th>
+                </tr>
+                <tr>
+                  <td>{{reportData['id']}}</td>
+                  <td>{{reportData['status']}}</td>
+                  <td>{{reportData['timeTaken']}}</td>
+                </tr>
+            </table>
+        </div>
+        <br><br><br>
+        {% if reportData['filename']==None %}
+            <a href="/get_report/{{reportData['id']}}"><b>Refresh for Current Status</b></a>
+        {% else %}
+            <a href="/download_report/{{reportData['filename']}}"><b>Download Report</b></a>
+        {% endif %}
+        <br><br><br>
+        <a href="/">Go to Home</a>
+    {% endif %}
+
+    <script>
+        function onPivotChange(){
+            var num = document.getElementById('pivotinp').value;
+            num = Number(num);     
+            var triggerer = document.getElementById('triggerer');
+            triggerer.setAttribute("href", "/trigger_report/" + (num<=0 ? "":num));
+        }
+    </script>
+    
+</body>

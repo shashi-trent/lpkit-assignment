@@ -2,12 +2,13 @@
 import enum
 
 class StoreStatus(enum.Enum):
-    Active="ACTIVE"
-    InActive="INCATIVE"
+    Active="active"
+    InActive="inactive"
 
 class ReportStatus(enum.Enum):
     Running=0
     Complete=1
+    Error=2
 
 class SubReportType(enum.Enum):
     LastHour=0
@@ -28,20 +29,13 @@ class UtcEpochRange:
     fromEpoch:int
     toEpoch:int
 
-    # additional utc info (may not be relevant in some cases)
-    refWeekStartEpoch:int|None = None
-
     # additional local info (may not be relevant in some cases)
-    lTimezone:str|None = None
     lPytzTimezone = None
     lWeekDay:WeekDay|None = None
 
-    def __init__(self, fromEpoch:int, toEpoch:int, refWeekStartEpoch:int|None=None,
-                 lTimezone:str|None=None, lPytzTimezone=None, lWeekDay:WeekDay|None=None):
+    def __init__(self, fromEpoch:int, toEpoch:int, lPytzTimezone, lWeekDay:WeekDay|None=None):
         self.fromEpoch = fromEpoch
         self.toEpoch = toEpoch
-        self.refWeekStartEpoch = refWeekStartEpoch
-        self.lTimezone = lTimezone
         self.lPytzTimezone = lPytzTimezone
         self.lWeekDay = lWeekDay
 

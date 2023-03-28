@@ -1,13 +1,48 @@
 
 import pytz
-from datetime import datetime, time
-from lpkitchen.classes import SubReportType, UtcEpochRange, WeekDay
+from time import time as curTimestamp
+from datetime import datetime, time, timedelta
+from lpkit.classes import SubReportType, UtcEpochRange, WeekDay
 
 
 class DateUtils:
     HOUR_TO_MILLIS = 3600000
     DAY_TO_MILLIS = 86400000
     WEEK_TO_MILLIS = 604800000
+
+    @staticmethod
+    def curUtcEpoch():
+        return round(curTimestamp() * 1000) # in millis
+    
+    @staticmethod
+    def toIsoFormat(millis:int):
+        secs, _ = divmod(millis, 1000)
+        mins, secs = divmod(secs, 60)
+        hrs, mins = divmod(mins, 60)
+        return str(time(hour=hrs, minute=mins, second=secs))
+    
+    @staticmethod
+    def toTime(timeStr:str) -> time:
+        timeStr += "" if '.' in timeStr else ".0"
+        return datetime.strptime(timeStr, "%H:%M:%S.%f").time()
+    
+    @staticmethod
+    def toDateTime(dateTimeStr:str) -> datetime:
+        try:
+            return datetime.strptime(dateTimeStr, "%Y-%m-%d %H:%M:%S.%f %Z")
+        except ValueError:
+            return datetime.strptime(dateTimeStr, "%Y-%m-%d %H:%M:%S %Z")
+
+    @staticmethod
+    def getWeekStartUtcEpoch(utcEpoch:int, pytzTimezone):
+        localDateTime = datetime.fromtimestamp(utcEpoch / 1000, tz=pytz.utc).astimezone(pytzTimezone)
+        utcWeekStartDateTime = DateUtils.startOfWeek(localDateTime).astimezone(pytz.utc)
+        return round(utcWeekStartDateTime.timestamp() * 1000)
+    
+    @staticmethod
+    def toDateTimeIsoFormat(utcEpoch:int) -> int:
+        dateTime = datetime.fromtimestamp(utcEpoch / 1000, tz=pytz.utc)
+        return dateTime.isoformat()
 
     @staticmethod
     def toUtcEpoch(inputDay:WeekDay, inputTime:time, refWeekStartUtcEpoch:int) -> int:
@@ -70,5 +105,5 @@ class DateUtils:
     @staticmethod
     def startOfWeek(dateTime:datetime):
         curWeekDayOrdinal = dateTime.isoweekday() - 1
-        return dateTime.replace(day=dateTime.day - curWeekDayOrdinal, hour=0, minute=0, second=0, microsecond=0)
+        return DateUtils.startOfDay(dateTime) - timedelta(days=curWeekDayOrdinal)
     
