@@ -27,11 +27,13 @@ class DateUtils:
         return datetime.strptime(timeStr, "%H:%M:%S.%f").time()
     
     @staticmethod
-    def toDateTime(dateTimeStr:str) -> datetime:
+    def asUtcDateTime(dateTimeStr:str) -> datetime:
+        dateTime:datetime
         try:
-            return datetime.strptime(dateTimeStr, "%Y-%m-%d %H:%M:%S.%f %Z")
+            dateTime = datetime.strptime(dateTimeStr, "%Y-%m-%d %H:%M:%S.%f %Z")
         except ValueError:
-            return datetime.strptime(dateTimeStr, "%Y-%m-%d %H:%M:%S %Z")
+            dateTime = datetime.strptime(dateTimeStr, "%Y-%m-%d %H:%M:%S %Z")
+        return pytz.utc.localize(dateTime)
 
     @staticmethod
     def getWeekStartUtcEpoch(utcEpoch:int, pytzTimezone):
@@ -40,9 +42,9 @@ class DateUtils:
         return round(utcWeekStartDateTime.timestamp() * 1000)
     
     @staticmethod
-    def toDateTimeIsoFormat(utcEpoch:int) -> int:
+    def toDateTimeIsoFormat(utcEpoch:int):
         dateTime = datetime.fromtimestamp(utcEpoch / 1000, tz=pytz.utc)
-        return dateTime.isoformat()
+        return dateTime.isoformat(sep=" ")
 
     @staticmethod
     def toUtcEpoch(inputDay:WeekDay, inputTime:time, refWeekStartUtcEpoch:int) -> int:
@@ -96,7 +98,7 @@ class DateUtils:
     
     @staticmethod
     def startOfHour(dateTime:datetime):
-        return dateTime.replace(hour=dateTime.hour, minute=0, second=0, microsecond=0)
+        return dateTime.replace(minute=0, second=0, microsecond=0)
     
     @staticmethod
     def startOfDay(dateTime:datetime):

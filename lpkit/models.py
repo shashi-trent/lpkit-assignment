@@ -29,7 +29,7 @@ class PolledStat(Table):
     def __init__(self, row):
         Table.__init__(self)
         self.storeId:int = self.column(PolledStat._StoreId, row)
-        self.timestampUtc = DateUtils.toDateTime(self.column(PolledStat._TimestampUtc, row))
+        self.timestampUtc = DateUtils.asUtcDateTime(self.column(PolledStat._TimestampUtc, row))
         self.status = StoreStatus(self.column(PolledStat._Status, row))
 
 

@@ -6,7 +6,7 @@ from lpkit.utils import WeekDay
 
 def inQueryStr(params:list):
     if len(params) == 1:
-        return f"= {params[0]}"
+        return f"= '{params[0]}'"
     else:
         joinedParams = ", ".join([f"'{str(param)}'" for param in params])
         return f"IN ( {joinedParams} )"
@@ -58,20 +58,20 @@ class StoreRepo:
         
 
     @staticmethod
-    def getStoreSchedules(storeIds:list[int], weekDay:WeekDay):
+    def getStoreSchedules(storeIds:list[int], weekDay:WeekDay|None):
         db = get_db()
-        hours = db.execute(
+        schedules = db.execute(
             " ".join((
                 f"SELECT * FROM {StoreSchedule.table()} WHERE {StoreSchedule._StoreId} {inQueryStr(storeIds)}",
                 "" if weekDay is None else f"AND {StoreSchedule._DayOfWeek} = {weekDay.value}",
             ))
         ).fetchall()
 
-        if hours is None:
-            hours = []
+        if schedules is None:
+            schedules = []
 
         schedulesDict:dict[int, dict[WeekDay, list[StoreSchedule]]] = {}
-        for row in hours:
+        for row in schedules:
             schedule = StoreSchedule(row)
             if schedule.storeId not in schedulesDict:
                 schedulesDict[schedule.storeId] = {}

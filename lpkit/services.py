@@ -28,6 +28,8 @@ def filterSchedulesInUtcEpochRange(fromUtcEpoch:int, toUtcEpoch:int, localSchedu
                 if lastEpochRange[1] >= thisEpochRange[0]:
                     lastEpochRange = lastEpochRange[0], max(lastEpochRange[1], thisEpochRange[1])
                     filteredEpochRanges[-1] = lastEpochRange
+                else:
+                    filteredEpochRanges.append(thisEpochRange)
     
     return filteredEpochRanges
 
@@ -45,19 +47,22 @@ def calculateUpDownHours(utcEpochRangesInput:list[tuple[int,int]], sortedPolledS
 
     if len(utcEpochRanges) == 0:
         return 0, 0
+    utcEpochRangeIdx:int = 0
 
     # last (or default-last) polledStat properties for use in iteration
-    lastTimeRangeIdx:int = 0
     lastPollUtcEpoch:int = 0
     lastPollStatus:StoreStatus | None = None
 
     # internal method to add time-diff w.r.t 
-    #       1. utcEpochRanges(=StoreSchedule) {fromIdx:toIdx}
+    #       1. utcEpochRanges(=StoreSchedule :: filtered)
     #       2. epochMillis-difference {fromEpoch:toEpoch}
     #       3. considering status inside calculated-time-diff = @param(status = None has no effect on UpDown-time currently)
-    def addEpochFilteredMillisDiff(fromIdx:int, toIdx:int, fromEpoch:float, toEpoch:float, status:StoreStatus|None):
+    def addEpochFilteredMillisDiff(fromIdx:int, fromEpoch:float, toEpoch:float, status:StoreStatus|None):
+        if fromEpoch >= toEpoch:
+            return fromIdx
+        
         millisDiff:int = 0
-        while fromIdx < toIdx:
+        while fromIdx < len(utcEpochRanges):
             epochRange = utcEpochRanges[fromIdx]
             if toEpoch < epochRange[0]:
                 break
@@ -76,32 +81,25 @@ def calculateUpDownHours(utcEpochRangesInput:list[tuple[int,int]], sortedPolledS
         pollUtcEpoch:int = round(stat.timestampUtc.timestamp() * 1000)
 
         if pollUtcEpoch >= ignoreTill:
-            curTimeRangeIdx = lastTimeRangeIdx
-            while curTimeRangeIdx < len(utcEpochRanges):
-                if utcEpochRanges[curTimeRangeIdx][1] <= pollUtcEpoch:
-                    curTimeRangeIdx += 1
-                else:
-                    break
 
             # midEpoch divides last & cur polledStats into 2 equal time-ranges to assign status (active or inactive) to
             midEpoch = (lastPollUtcEpoch + pollUtcEpoch) / 2
             
             # calculate time diff from lastPollStat to middleTimeOf(lastPollStat, curPollStat)
-            rangeIdx:int = addEpochFilteredMillisDiff(lastTimeRangeIdx, min(curTimeRangeIdx + 1, len(utcEpochRanges)), lastPollUtcEpoch, midEpoch, lastPollStatus)
+            utcEpochRangeIdx = addEpochFilteredMillisDiff(utcEpochRangeIdx, lastPollUtcEpoch, midEpoch, lastPollStatus)
 
-            if curTimeRangeIdx < len(utcEpochRanges) and utcEpochRanges[curTimeRangeIdx][0] <= pollUtcEpoch:
-                # calculate time diff from middleTimeOf(lastPollStat, curPollStat) to curPollStat
-                rangeIdx = addEpochFilteredMillisDiff(rangeIdx, curTimeRangeIdx + 1, midEpoch, pollUtcEpoch, stat.status)
+            # calculate time diff from middleTimeOf(lastPollStat, curPollStat) to curPollStat
+            utcEpochRangeIdx = addEpochFilteredMillisDiff(utcEpochRangeIdx, midEpoch, pollUtcEpoch, stat.status)
 
-                # if it is last-polledStat -> 
-                #       use pivotUtcEpoch(=epochOf when report generation started) as next polledStat(with status=None) to extrapolate
-                if statIdx == len(sortedPolledStats)-1:
-                    extrapolateToEpoch = (pivotUtcEpoch + pollUtcEpoch) / 2
-                    rangeIdx = addEpochFilteredMillisDiff(curTimeRangeIdx, len(utcEpochRanges), pollUtcEpoch, extrapolateToEpoch, stat.status)
-            else:
+            # if it is last-polledStat -> 
+            #       use pivotUtcEpoch as next polledStat(with status=None) to extrapolate
+            if statIdx == len(sortedPolledStats)-1:
+                extrapolateToEpoch = (pivotUtcEpoch + pollUtcEpoch) / 2
+                utcEpochRangeIdx = addEpochFilteredMillisDiff(utcEpochRangeIdx, pollUtcEpoch, extrapolateToEpoch, stat.status)
+
+            if utcEpochRangeIdx >= len(utcEpochRanges):
                 break
 
-            lastTimeRangeIdx = curTimeRangeIdx
             lastPollStatus = stat.status
             lastPollUtcEpoch = pollUtcEpoch
     
